@@ -1,0 +1,97 @@
+name: Temporary ImageMagick MTV audit (ASan + UBSan)
+on:
+  push:
+    branches:
+      - audit-imagemagick-mtv-20261022
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout ImageMagick tag
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch 7.1.2-34 https://github.com/ImageMagick/ImageMagick.git /tmp/imagemagick-asan
+          cd /tmp/imagemagick-asan
+          git rev-parse HEAD
+      - name: Build with ASan and UBSan
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd /tmp/imagemagick-asan
+          ./configure --prefix="$RUNNER_TEMP/imagemagick-asan" --without-perl --without-magick-plus-plus --disable-openmp --with-modules=no CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" CXXFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined"
+          make -j2
+          make install
+          "$RUNNER_TEMP/imagemagick-asan/bin/magick" -version
+          ldd "$RUNNER_TEMP/imagemagick-asan/bin/magick" | grep -E 'asan|ubsan'
+      - name: Test unpatched source and preserve results
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess,os,json
+          base=Path('/tmp/mtv-cases');base.mkdir(exist_ok=True)
+          f=b'1 1\n\x01\x02\x03'
+          tests={
+            'valid.mtv':f+b'2 1\n'+bytes(range(4,10)),
+            'invalid_second_height.mtv':f+b'2 invalid\n'+bytes(range(4,10)),
+            'missing_second_height.mtv':f+b'2\n'+bytes(range(4,10)),
+            'invalid_first_height.mtv':b'1 invalid\n\x01\x02\x03',
+          }
+          magick=str(Path(os.environ['RUNNER_TEMP'])/'imagemagick-asan/bin/magick')
+          result={}
+          for name,data in tests.items():
+            path=base/name;path.write_bytes(data)
+            p=subprocess.run([magick,'-limit','memory','32MiB','-limit','map','32MiB','-limit','area','2MP','-format','%s:%wx%h\n','MTV:'+str(path),'info:'],capture_output=True,text=True,timeout=15)
+            result[name]={'exit':p.returncode,'stdout':p.stdout.strip(),'stderr':p.stderr[-1800:]}
+          print('AUDIT_UNPATCHED_RESULTS='+json.dumps(result,ensure_ascii=True),flush=True)
+          assert result['valid.mtv']['exit']==0
+          assert result['invalid_first_height.mtv']['exit']!=0
+          assert result['invalid_second_height.mtv']['exit']==0
+          assert result['missing_second_height.mtv']['exit']==0
+          assert all('AddressSanitizer' not in d['stderr'] and 'runtime error:' not in d['stderr'] for d in result.values())
+          PY
+      - name: Apply validation patch and rebuild
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd /tmp/imagemagick-asan
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('coders/mtv.c')
+          s=p.read_text()
+          old='    count=(ssize_t) MagickSscanf(buffer,"%lu %lu\\n",&columns,&rows);\n    if (count > 0)\n'
+          new='    count=(ssize_t) MagickSscanf(buffer,"%lu %lu\\n",&columns,&rows);\n    if (count != 2)\n      ThrowReaderException(CorruptImageError,"ImproperImageHeader");\n    if (count > 0)\n'
+          assert s.count(old)==1,s.count(old)
+          p.write_text(s.replace(old,new))
+          PY
+          make -j2
+          make install
+      - name: Test patched source with ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess,os,json
+          base=Path('/tmp/mtv-cases')
+          magick=str(Path(os.environ['RUNNER_TEMP'])/'imagemagick-asan/bin/magick')
+          result={}
+          for path in base.glob('*.mtv'):
+            p=subprocess.run([magick,'-limit','memory','32MiB','-limit','map','32MiB','-limit','area','2MP','-format','%s:%wx%h\n','MTV:'+str(path),'info:'],capture_output=True,text=True,timeout=15)
+            result[path.name]={'exit':p.returncode,'stdout':p.stdout.strip(),'stderr':p.stderr[-1800:]}
+          print('AUDIT_PATCHED_RESULTS='+json.dumps(result,ensure_ascii=True),flush=True)
+          assert result['valid.mtv']['exit']==0
+          for name in ['invalid_first_height.mtv','invalid_second_height.mtv','missing_second_height.mtv']:
+            assert result[name]['exit']!=0, name
+            assert 'ImproperImageHeader' in result[name]['stderr'],name
+          assert all('AddressSanitizer' not in d['stderr'] and 'runtime error:' not in d['stderr'] for d in result.values())
+          PY
