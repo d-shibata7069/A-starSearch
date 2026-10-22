@@ -92,6 +92,6 @@ jobs:
           assert result['valid.mtv']['exit']==0
           for name in ['invalid_first_height.mtv','invalid_second_height.mtv','missing_second_height.mtv']:
             assert result[name]['exit']!=0, name
-            assert 'ImproperImageHeader' in result[name]['stderr'],name
+            assert 'improper image header' in result[name]['stderr'].lower(),name
           assert all('AddressSanitizer' not in d['stderr'] and 'runtime error:' not in d['stderr'] for d in result.values())
           PY
