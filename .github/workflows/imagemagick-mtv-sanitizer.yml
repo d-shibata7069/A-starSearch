@@ -43,6 +43,8 @@ jobs:
             'invalid_second_height.mtv':f+b'2 invalid\n'+bytes(range(4,10)),
             'missing_second_height.mtv':f+b'2\n'+bytes(range(4,10)),
             'invalid_first_height.mtv':b'1 invalid\n\x01\x02\x03',
+            'trailing_blank.mtv':f+b'\n',
+            'trailing_text.mtv':f+b'extra\n',
           }
           magick=str(Path(os.environ['RUNNER_TEMP'])/'imagemagick-asan/bin/magick')
           result={}
@@ -52,6 +54,8 @@ jobs:
             result[name]={'exit':p.returncode,'stdout':p.stdout.strip(),'stderr':p.stderr[-1800:]}
           print('AUDIT_UNPATCHED_RESULTS='+json.dumps(result,ensure_ascii=True),flush=True)
           assert result['valid.mtv']['exit']==0
+          assert result['trailing_blank.mtv']['exit']==0
+          assert result['trailing_text.mtv']['exit']==0
           assert result['invalid_first_height.mtv']['exit']!=0
           assert result['invalid_second_height.mtv']['exit']==0
           assert result['missing_second_height.mtv']['exit']==0
@@ -67,7 +71,7 @@ jobs:
           p=Path('coders/mtv.c')
           s=p.read_text()
           old='    count=(ssize_t) MagickSscanf(buffer,"%lu %lu\\n",&columns,&rows);\n    if (count > 0)\n'
-          new='    count=(ssize_t) MagickSscanf(buffer,"%lu %lu\\n",&columns,&rows);\n    if (count != 2)\n      ThrowReaderException(CorruptImageError,"ImproperImageHeader");\n    if (count > 0)\n'
+          new='    count=(ssize_t) MagickSscanf(buffer,"%lu %lu\\n",&columns,&rows);\n    if (count == 1)\n      ThrowReaderException(CorruptImageError,"ImproperImageHeader");\n    if (count > 0)\n'
           assert s.count(old)==1,s.count(old)
           p.write_text(s.replace(old,new))
           PY
@@ -90,6 +94,8 @@ jobs:
             result[path.name]={'exit':p.returncode,'stdout':p.stdout.strip(),'stderr':p.stderr[-1800:]}
           print('AUDIT_PATCHED_RESULTS='+json.dumps(result,ensure_ascii=True),flush=True)
           assert result['valid.mtv']['exit']==0
+          assert result['trailing_blank.mtv']['exit']==0
+          assert result['trailing_text.mtv']['exit']==0
           for name in ['invalid_first_height.mtv','invalid_second_height.mtv','missing_second_height.mtv']:
             assert result[name]['exit']!=0, name
             assert 'improper image header' in result[name]['stderr'].lower(),name
