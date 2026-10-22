@@ -96,7 +96,7 @@ jobs:
                           hits.append(dict(format=fmt,index=i,**result))
                           print('CANDIDATE='+json.dumps(hits[-1]),flush=True)
                   if time.monotonic()-start>390:break
-              print('PROGRESS='+json.dumps({fmt:counts[fmt],elapsed:int(time.monotonic()-start)}),flush=True)
+              print('PROGRESS='+json.dumps({fmt:counts[fmt],'elapsed':int(time.monotonic()-start)}),flush=True)
               if time.monotonic()-start>390:break
           print('FUZZ_SUMMARY='+json.dumps({'total':total,'counts':counts,'hits':hits[:16],'elapsed_sec':round(time.monotonic()-start,2)}),flush=True)
           PY
